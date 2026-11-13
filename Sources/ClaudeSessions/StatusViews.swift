@@ -31,7 +31,10 @@ private struct LiveStatusIcon: View {
 
     @ViewBuilder
     private var icon: some View {
-        if tab.needsAttention {
+        if tab.kind == .shell {
+            Image(systemName: "terminal.fill")
+                .foregroundStyle(tab.status == .working ? Theme.working : Color.secondary)
+        } else if tab.needsAttention {
             Image(systemName: "bell.badge.fill")
                 .symbolRenderingMode(.palette)
                 .foregroundStyle(Theme.attention, Theme.attention.opacity(0.7))

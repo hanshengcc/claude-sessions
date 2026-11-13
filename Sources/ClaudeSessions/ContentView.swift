@@ -15,6 +15,8 @@ struct ContentView: View {
             DetailView()
         }
         .tint(Theme.accent)
+        .overlay(alignment: .bottom) { ToastView() }
+        .animation(.spring(duration: 0.3), value: ui.toast)
         .onReceive(store.$sessions) { tabs.bindNewSessions($0) }
         .onChange(of: ui.newSessionToken) { pickFolderForNewSession() }
     }
@@ -76,17 +78,31 @@ struct DetailView: View {
 
 struct DetailToolbar: ToolbarContent {
     @EnvironmentObject private var tabs: TabManager
+    @EnvironmentObject private var ui: UIState
+
+    private var cwd: String { tabs.selected?.cwd ?? NSHomeDirectory() }
 
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
-            if let tab = tabs.selected {
-                Button { revealInFinder(tab.cwd) } label: { Label("在 Finder 中显示", systemImage: "folder") }
-                    .help("在 Finder 中显示工作目录")
-                Button {
-                    tab.sessionID.map { copyToPasteboard(resumeCommand(cwd: tab.cwd, sessionID: $0)) }
-                } label: { Label("复制恢复命令", systemImage: "terminal") }
-                    .disabled(tab.sessionID == nil)
-                    .help("复制在终端继续此会话的命令")
+            Button { tabs.newShell(in: cwd) } label: { Label("打开终端", systemImage: "terminal") }
+                .help("在 \(abbreviateHome(cwd)) 打开终端标签 (⌘⇧T)")
+            Button { openFolder(cwd) } label: { Label("打开所在文件夹", systemImage: "folder") }
+                .help("在 Finder 中打开 \(abbreviateHome(cwd)) (⌘⇧O)")
+            Menu {
+                Button { openInTerminalApp(cwd) } label: { Label("在「终端」App 中打开", systemImage: "macwindow") }
+                Button { revealInFinder(cwd) } label: { Label("在 Finder 中选中文件夹", systemImage: "scope") }
+                Button { ui.copy(cwd, message: "已复制路径") } label: { Label("复制路径", systemImage: "link") }
+                if let tab = tabs.selected, let id = tab.sessionID {
+                    Divider()
+                    Button { ui.copy(resumeCommand(cwd: tab.cwd, sessionID: id), message: "已复制恢复命令") } label: {
+                        Label("复制恢复命令", systemImage: "doc.on.doc")
+                    }
+                }
+            } label: {
+                Label("更多", systemImage: "ellipsis.circle")
+            }
+            .help("更多操作")
+            if tabs.selected != nil {
                 ControlGroup {
                     Button { tabs.adjustFontSize(by: -1) } label: { Image(systemName: "minus.magnifyingglass") }
                         .help("缩小字号 (⌘-)")
@@ -221,5 +237,23 @@ struct TerminalContainer: NSViewRepresentable {
         view.autoresizingMask = [.width, .height]
         container.addSubview(view)
         DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
+    }
+}
+
+struct ToastView: View {
+    @EnvironmentObject private var ui: UIState
+
+    var body: some View {
+        if let message = ui.toast {
+            Label(message, systemImage: "checkmark.circle.fill")
+                .font(.system(size: 12, weight: .medium))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(.separator))
+                .shadow(color: .black.opacity(0.2), radius: 8, y: 3)
+                .padding(.bottom, 24)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
     }
 }

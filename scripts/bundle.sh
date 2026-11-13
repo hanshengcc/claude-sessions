@@ -4,7 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 APP_NAME="Claude Sessions"
-APP="build/${APP_NAME}.app"
+# build.noindex: keep Spotlight from registering a second copy of the app
+APP="build.noindex/${APP_NAME}.app"
 VERSION="0.1.0"
 
 swift build -c release --arch arm64
@@ -27,6 +28,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleIconName</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
@@ -34,12 +36,29 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns "$APP/Contents/Resources/"; fi
-codesign --force --sign - "$APP"
+# Icon Composer source -> Assets.car (Liquid Glass icon) + AppIcon.icns fallback.
+ICON_OUT="build.noindex/icon"
+rm -rf "$ICON_OUT" && mkdir -p "$ICON_OUT"
+xcrun actool Resources/AppIcon.icon --compile "$ICON_OUT" --platform macosx \
+  --minimum-deployment-target 15.0 --app-icon AppIcon \
+  --output-partial-info-plist "$ICON_OUT/partial.plist" >/dev/null
+cp "$ICON_OUT/Assets.car" "$ICON_OUT/AppIcon.icns" "$APP/Contents/Resources/"
+# Sign with a stable local identity: TCC (Documents, Desktop, ...) grants are tied to
+# the signature, and ad-hoc signing changes it every build, re-triggering every prompt.
+SIGN_ID="${SIGN_ID:-LiveSubtitle Developer}"
+if security find-identity -v -p codesigning | grep -q "\"$SIGN_ID\""; then
+  codesign --force --sign "$SIGN_ID" --identifier local.claude-sessions "$APP"
+else
+  echo "warning: signing identity '$SIGN_ID' not found, falling back to ad-hoc (permissions will re-prompt)"
+  codesign --force --sign - "$APP"
+fi
 echo "Built $APP ($(du -sh "$APP" | cut -f1))"
 
 if [ "${1:-}" = "--install" ]; then
   rm -rf "/Applications/${APP_NAME}.app"
   cp -R "$APP" /Applications/
   echo "Installed /Applications/${APP_NAME}.app"
+  # Only the installed copy should show up in Launchpad / the Applications list.
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+    -u "$PWD/$APP" 2>/dev/null || true
 fi

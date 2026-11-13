@@ -28,6 +28,26 @@ struct ClaudeSessionsApp: App {
 final class UIState: ObservableObject {
     @Published var focusSearchToken = 0
     @Published var newSessionToken = 0
+    @Published private(set) var toast: String?
+    private var toastTask: Task<Void, Never>?
+
+    private static let toastNanoseconds: UInt64 = 1_600_000_000
+
+    /// Short confirmation bubble at the bottom of the window.
+    func showToast(_ message: String) {
+        toast = message
+        toastTask?.cancel()
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.toastNanoseconds)
+            guard !Task.isCancelled else { return }
+            self?.toast = nil
+        }
+    }
+
+    func copy(_ text: String, message: String) {
+        copyToPasteboard(text)
+        showToast(message)
+    }
 }
 
 @MainActor
@@ -46,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         handleLaunchArguments(CommandLine.arguments)
     }
 
-    /// `--new <dir>` starts a session in dir; `--open <session-id>` resumes one.
+    /// `--new <dir>` starts a session in dir, `--shell <dir>` opens a shell tab, `--open <session-id>` resumes one.
     private func handleLaunchArguments(_ args: [String]) {
         func value(after flag: String) -> String? {
             guard let index = args.firstIndex(of: flag), args.indices.contains(index + 1) else { return nil }
@@ -54,6 +74,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let dir = value(after: "--new") {
             tabs.newSession(in: (dir as NSString).standardizingPath)
+        }
+        if let dir = value(after: "--shell") {
+            tabs.newShell(in: (dir as NSString).standardizingPath)
         }
         if let id = value(after: "--open"), let session = store.findSession(id: id) {
             tabs.open(session)
@@ -100,6 +123,10 @@ struct AppCommands: Commands {
         CommandGroup(replacing: .newItem) {
             Button("新建会话…") { ui.newSessionToken += 1 }
                 .keyboardShortcut("t")
+            Button("新建终端标签") { tabs.newShell(in: tabs.selected?.cwd ?? NSHomeDirectory()) }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+            Button("打开所在文件夹") { openFolder(tabs.selected?.cwd ?? NSHomeDirectory()) }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
             Button("关闭标签") { tabs.closeSelected() }
                 .keyboardShortcut("w")
         }

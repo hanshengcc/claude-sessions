@@ -33,6 +33,7 @@ struct TabBarView: View {
 struct TabChip: View {
     @EnvironmentObject private var store: SessionStore
     @EnvironmentObject private var tabs: TabManager
+    @EnvironmentObject private var ui: UIState
     @ObservedObject var tab: TerminalTab
     let index: Int
     let isSelected: Bool
@@ -99,16 +100,18 @@ struct TabChip: View {
             Button { tabs.restart(tab) } label: { Label("重新打开", systemImage: "arrow.clockwise") }
         }
         if let id = tab.sessionID {
-            Button { copyToPasteboard(resumeCommand(cwd: tab.cwd, sessionID: id)) } label: {
+            Button { ui.copy(resumeCommand(cwd: tab.cwd, sessionID: id), message: "已复制恢复命令") } label: {
                 Label("复制恢复命令", systemImage: "terminal")
             }
         }
-        Button { revealInFinder(tab.cwd) } label: { Label("在 Finder 中显示", systemImage: "folder") }
+        Button { tabs.newShell(in: tab.cwd) } label: { Label("在此目录打开终端", systemImage: "terminal") }
+        Button { openFolder(tab.cwd) } label: { Label("打开所在文件夹", systemImage: "folder") }
         Divider()
         Button { tabs.close(tab) } label: { Label("关闭标签", systemImage: "xmark") }
     }
 
     private var title: String {
+        if tab.kind == .shell { return "终端 · \((tab.cwd as NSString).lastPathComponent)" }
         if let id = tab.sessionID, let session = store.session(id: id) { return store.displayTitle(session) }
         return "新会话 · \((tab.cwd as NSString).lastPathComponent)"
     }

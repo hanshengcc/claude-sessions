@@ -106,6 +106,17 @@ func resumeCommand(cwd: String, sessionID: String) -> String {
     "cd \(shellQuote(cwd)) && claude --resume \(sessionID)"
 }
 
+func openInTerminalApp(_ path: String) {
+    let terminal = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+    NSWorkspace.shared.open([URL(fileURLWithPath: path)], withApplicationAt: terminal,
+                            configuration: NSWorkspace.OpenConfiguration())
+}
+
+/// Open the folder itself in a Finder window.
+func openFolder(_ path: String) {
+    NSWorkspace.shared.open(URL(fileURLWithPath: path, isDirectory: true))
+}
+
 func revealInFinder(_ path: String) {
     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
 }

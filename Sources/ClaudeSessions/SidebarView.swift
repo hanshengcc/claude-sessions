@@ -16,6 +16,9 @@ struct SidebarView: View {
     @AppStorage("sidebarMode") private var mode: SidebarMode = .recent
     @AppStorage("showHidden") private var showHidden = false
     @State private var query = ""
+    /// Row highlight only. AppKit rewrites list selection when rows reorder, so
+    /// selection changes must never open sessions; only an explicit click does.
+    @State private var highlighted: String?
     @State private var collapsed: Set<String> = []
     @State private var renaming: SessionInfo?
     @State private var renameText = ""
@@ -24,7 +27,7 @@ struct SidebarView: View {
     private var visible: [SessionInfo] { store.visible(query: query, showHidden: showHidden) }
 
     var body: some View {
-        List(selection: selectionBinding) {
+        List(selection: $highlighted) {
             switch mode {
             case .recent:
                 ForEach(visible) { row($0, showProject: true) }
@@ -49,6 +52,7 @@ struct SidebarView: View {
             ToolbarItem { NewSessionMenu() }
         }
         .onChange(of: ui.focusSearchToken) { searchFocused = true }
+        .onChange(of: tabs.selected?.sessionID, initial: true) { _, id in highlighted = id }
         .alert("重命名会话", isPresented: renameBinding) {
             TextField("名称（留空恢复原标题）", text: $renameText)
             Button("保存") { renaming.map { store.rename($0.id, to: renameText) } }
@@ -111,6 +115,9 @@ struct SidebarView: View {
 
     private func row(_ session: SessionInfo, showProject: Bool) -> some View {
         SessionRow(session: session, showProject: showProject)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .simultaneousGesture(TapGesture().onEnded { tabs.open(session) })
             .tag(session.id)
             .contextMenu { contextMenu(for: session) }
     }
@@ -120,6 +127,9 @@ struct SidebarView: View {
         Button { tabs.open(session) } label: { Label("打开", systemImage: "arrow.up.right.square") }
         Button { tabs.newSession(in: session.cwd) } label: {
             Label("在同目录新建会话", systemImage: "plus.bubble")
+        }
+        Button { tabs.newShell(in: session.cwd) } label: {
+            Label("在此目录打开终端", systemImage: "terminal")
         }
         Divider()
         Button {
@@ -135,21 +145,14 @@ struct SidebarView: View {
                 ? Label("取消隐藏", systemImage: "eye") : Label("隐藏", systemImage: "eye.slash")
         }
         Divider()
-        Button { copyToPasteboard(resumeCommand(cwd: session.cwd, sessionID: session.id)) } label: {
+        Button { ui.copy(resumeCommand(cwd: session.cwd, sessionID: session.id), message: "已复制恢复命令") } label: {
             Label("复制恢复命令", systemImage: "terminal")
         }
-        Button { copyToPasteboard(session.id) } label: { Label("复制会话 ID", systemImage: "number") }
-        Button { revealInFinder(session.cwd) } label: { Label("在 Finder 中显示", systemImage: "folder") }
+        Button { ui.copy(session.id, message: "已复制会话 ID") } label: { Label("复制会话 ID", systemImage: "number") }
+        Button { openFolder(session.cwd) } label: { Label("打开所在文件夹", systemImage: "folder") }
     }
 
     // MARK: Bindings
-
-    private var selectionBinding: Binding<String?> {
-        Binding(
-            get: { tabs.selected?.sessionID },
-            set: { id in id.flatMap(store.session(id:)).map(tabs.open) }
-        )
-    }
 
     private func expandedBinding(_ cwd: String) -> Binding<Bool> {
         Binding(
@@ -202,6 +205,9 @@ struct NewSessionMenu: View {
     var body: some View {
         Menu {
             Button { ui.newSessionToken += 1 } label: { Label("选择文件夹…", systemImage: "folder.badge.plus") }
+            Button { tabs.newShell(in: tabs.selected?.cwd ?? NSHomeDirectory()) } label: {
+                Label("新建终端标签", systemImage: "terminal")
+            }
             Divider()
             Section("最近的项目") {
                 ForEach(store.recentProjects.prefix(recentLimit), id: \.self) { cwd in

@@ -15,10 +15,16 @@ enum TabStatus {
     case working, idle, exited
 }
 
+/// What a tab runs: a claude session, or a plain login shell.
+enum TabKind {
+    case claude, shell
+}
+
 @MainActor
 final class TerminalTab: ObservableObject, Identifiable {
     let id = UUID()
     let cwd: String
+    let kind: TabKind
     let view: LocalProcessTerminalView
     let clock = ActivityClock()
     @Published var sessionID: String?
@@ -26,8 +32,9 @@ final class TerminalTab: ObservableObject, Identifiable {
     @Published var needsAttention = false
     private(set) var spawnedAt = Date()
 
-    init(cwd: String, sessionID: String?) {
+    init(cwd: String, sessionID: String?, kind: TabKind = .claude) {
         self.cwd = cwd
+        self.kind = kind
         self.sessionID = sessionID
         view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         TerminalAppearance.apply(to: view)
@@ -89,6 +96,10 @@ final class TabManager: NSObject, ObservableObject, LocalProcessTerminalViewDele
         add(TerminalTab(cwd: cwd, sessionID: nil))
     }
 
+    func newShell(in cwd: String) {
+        add(TerminalTab(cwd: cwd, sessionID: nil, kind: .shell))
+    }
+
     func restart(_ tab: TerminalTab) { launch(tab) }
 
     func close(_ tab: TerminalTab) {
@@ -148,13 +159,17 @@ final class TabManager: NSObject, ObservableObject, LocalProcessTerminalViewDele
             tab.view.feed(text: "正在读取 shell 环境…\r\n")
             return
         }
-        guard let claude = env.claudePath else {
-            tab.view.feed(text: "\r\n找不到 claude 命令。请确认终端里 `which claude` 有结果。\r\n")
+        guard FileManager.default.fileExists(atPath: tab.cwd) else {
+            tab.view.feed(text: "\r\n目录不存在：\(tab.cwd)\r\n")
             tab.status = .exited
             return
         }
-        guard FileManager.default.fileExists(atPath: tab.cwd) else {
-            tab.view.feed(text: "\r\n目录不存在：\(tab.cwd)\r\n")
+        if tab.kind == .shell {
+            launchShell(tab, env: env)
+            return
+        }
+        guard let claude = env.claudePath else {
+            tab.view.feed(text: "\r\n找不到 claude 命令。请确认终端里 `which claude` 有结果。\r\n")
             tab.status = .exited
             return
         }
@@ -166,13 +181,21 @@ final class TabManager: NSObject, ObservableObject, LocalProcessTerminalViewDele
                               execName: "claude", currentDirectory: tab.cwd)
     }
 
+    private func launchShell(_ tab: TerminalTab, env: ShellEnvironment) {
+        let shell = env.variables["SHELL"] ?? "/bin/zsh"
+        tab.markSpawned()
+        // Leading "-" in argv[0] makes it a login shell, like Terminal.app.
+        tab.view.startProcess(executable: shell, args: [], environment: env.asArray,
+                              execName: "-" + (shell as NSString).lastPathComponent, currentDirectory: tab.cwd)
+    }
+
     // MARK: New-session binding
 
     /// A fresh `claude` gets its session id only once it writes a .jsonl;
     /// attach the newest unclaimed session in the same folder.
     func bindNewSessions(_ sessions: [SessionInfo]) {
         let claimed = Set(tabs.compactMap(\.sessionID))
-        for tab in tabs where tab.sessionID == nil {
+        for tab in tabs where tab.sessionID == nil && tab.kind == .claude {
             let match = sessions.first { session in
                 session.cwd == tab.cwd && !claimed.contains(session.id)
                     && (session.startedAt ?? session.updatedAt) >= tab.spawnedAt.addingTimeInterval(-5)
@@ -189,7 +212,7 @@ final class TabManager: NSObject, ObservableObject, LocalProcessTerminalViewDele
         for tab in tabs where tab.status != .exited {
             let quiet = now.timeIntervalSince(tab.clock.lastOutput) > Self.quietSeconds
             let next: TabStatus = quiet ? .idle : .working
-            if tab.status == .working, next == .idle, tab.id != selectedID || !appActive {
+            if tab.kind == .claude, tab.status == .working, next == .idle, tab.id != selectedID || !appActive {
                 tab.needsAttention = true
             }
             if tab.status != next { tab.status = next }
