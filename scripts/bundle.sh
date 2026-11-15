@@ -43,6 +43,8 @@ xcrun actool Resources/AppIcon.icon --compile "$ICON_OUT" --platform macosx \
   --minimum-deployment-target 15.0 --app-icon AppIcon \
   --output-partial-info-plist "$ICON_OUT/partial.plist" >/dev/null
 cp "$ICON_OUT/Assets.car" "$ICON_OUT/AppIcon.icns" "$APP/Contents/Resources/"
+# Phone web client, served by the built-in HTTP server.
+rm -rf "$APP/Contents/Resources/Web" && cp -R Web "$APP/Contents/Resources/Web"
 # Sign with a stable local identity: TCC (Documents, Desktop, ...) grants are tied to
 # the signature, and ad-hoc signing changes it every build, re-triggering every prompt.
 SIGN_ID="${SIGN_ID:-LiveSubtitle Developer}"

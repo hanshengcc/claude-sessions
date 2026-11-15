@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#111113">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Sessions">
+  <meta name="format-detection" content="telephone=no">
+  <title>Claude Sessions</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icon-180.png">
+  <link rel="icon" href="/icon-192.png">
+  <link rel="stylesheet" href="/vendor/xterm.css">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Session list -->
+    <section id="list-view" class="view">
+      <header class="list-header">
+        <div class="list-title-row">
+          <div>
+            <h1>会话</h1>
+            <div class="host"><span class="conn-dot" id="list-conn"></span><span id="host-name">连接中…</span></div>
+          </div>
+          <button class="icon-btn accent" id="new-btn" aria-label="新建">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
+        <label class="search">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="search" type="search" placeholder="搜索标题、内容、项目" autocomplete="off" autocorrect="off" spellcheck="false">
+        </label>
+      </header>
+      <main class="list-body" id="list-body">
+        <div class="placeholder" id="list-placeholder">
+          <div class="spinner"></div>
+        </div>
+      </main>
+    </section>
+
+    <!-- Terminal -->
+    <section id="term-view" class="view hidden">
+      <header class="term-header">
+        <button class="back-btn" id="back-btn" aria-label="返回">
+          <svg viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></svg>
+        </button>
+        <div class="term-heading">
+          <div class="term-title" id="term-title">…</div>
+          <div class="term-sub"><span class="status-dot" id="term-dot"></span><span id="term-status"></span></div>
+        </div>
+        <button class="icon-btn" id="menu-btn" aria-label="更多">
+          <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+        </button>
+      </header>
+      <div class="banner hidden" id="banner"></div>
+      <div class="term-wrap" id="term-wrap">
+        <div id="terminal"></div>
+        <button class="to-bottom hidden" id="to-bottom" aria-label="回到底部">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
+        </button>
+      </div>
+      <footer class="dock">
+        <div class="keys" id="keys"></div>
+        <div class="composer">
+          <textarea id="input" rows="1" placeholder="给 Claude 发消息…" enterkeyhint="enter" autocapitalize="off" autocomplete="off"></textarea>
+          <button class="send-btn" id="send-btn" aria-label="发送">
+            <svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+          </button>
+        </div>
+      </footer>
+    </section>
+  </div>
+
+  <!-- Bottom sheet -->
+  <div class="sheet-backdrop hidden" id="sheet-backdrop"></div>
+  <div class="sheet hidden" id="sheet" role="dialog" aria-modal="true">
+    <div class="sheet-grabber"></div>
+    <div class="sheet-content" id="sheet-content"></div>
+  </div>
+  <div class="toast hidden" id="toast"></div>
+
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/addon-fit.js"></script>
+  <script src="/vendor/addon-unicode11.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -12,13 +12,16 @@ struct ClaudeSessionsApp: App {
                 .environmentObject(appDelegate.store)
                 .environmentObject(appDelegate.tabs)
                 .environmentObject(appDelegate.ui)
+                .environmentObject(appDelegate.remote)
                 .frame(minWidth: 820, minHeight: 480)
         }
         .defaultSize(width: 1280, height: 820)
         .commands { AppCommands(tabs: appDelegate.tabs, store: appDelegate.store, ui: appDelegate.ui) }
 
         Settings {
-            SettingsView().environmentObject(appDelegate.tabs)
+            SettingsView()
+                .environmentObject(appDelegate.tabs)
+                .environmentObject(appDelegate.remote)
         }
     }
 }
@@ -55,13 +58,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let store = SessionStore()
     let tabs = TabManager()
     let ui = UIState()
+    lazy var remote = RemoteController(store: store, tabs: tabs)
     private var keyMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            Self.handleShiftEnter(event) ? nil : event
+        _ = remote
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.reclaimFromPhone(event)
+            return Self.handleShiftEnter(event) ? nil : event
         }
         handleLaunchArguments(CommandLine.arguments)
     }
@@ -87,7 +93,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tabs.clearSelectedAttention()
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    /// Keep serving the phone after the window is closed; the Dock icon reopens it.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !remote.isEnabled }
+
+    /// Typing into a terminal the phone is driving hands its size back to the Mac.
+    private func reclaimFromPhone(_ event: NSEvent) {
+        guard let terminal = event.window?.firstResponder as? TerminalView,
+              let tab = tabs.tabs.first(where: { $0.view === terminal }) else { return }
+        tab.claimForDesktop()
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let running = tabs.runningCount
@@ -187,6 +201,11 @@ struct SettingsView: View {
                 }
             } header: {
                 Text("终端")
+            }
+            Section {
+                PhoneAccessPanel().padding(-8)
+            } header: {
+                Text("手机访问")
             }
             Section {
                 LabeledContent {

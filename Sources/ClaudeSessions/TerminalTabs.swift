@@ -2,15 +2,6 @@ import AppKit
 import SessionCore
 import SwiftTerm
 
-/// Timestamp of the last process output, written from SwiftTerm's parse thread.
-final class ActivityClock: @unchecked Sendable {
-    private let lock = NSLock()
-    private var last = Date()
-
-    func touch() { lock.withLock { last = Date() } }
-    var lastOutput: Date { lock.withLock { last } }
-}
-
 enum TabStatus {
     case working, idle, exited
 }
@@ -20,37 +11,95 @@ enum TabKind {
     case claude, shell
 }
 
+/// Who decides the pty size: the Mac window, or a phone that is driving the session.
+enum SizeOwner {
+    case desktop, remote
+}
+
 @MainActor
 final class TerminalTab: ObservableObject, Identifiable {
     let id = UUID()
     let cwd: String
     let kind: TabKind
-    let view: LocalProcessTerminalView
-    let clock = ActivityClock()
+    let view: TerminalView
+    let bridge: ProcessBridge
     @Published var sessionID: String?
     @Published var status: TabStatus = .working
     @Published var needsAttention = false
+    @Published private(set) var sizeOwner: SizeOwner = .desktop
+    @Published private(set) var remoteViewers = 0
     private(set) var spawnedAt = Date()
+    private(set) var process: LocalProcess?
+    private var desktopSize = OutputBuffer.Size(cols: 80, rows: 24)
+    private var remoteSize: OutputBuffer.Size?
+
+    var clock: ActivityClock { bridge.clock }
+    var output: OutputBuffer { bridge.output }
+    var isRunning: Bool { status != .exited }
 
     init(cwd: String, sessionID: String?, kind: TabKind = .claude) {
         self.cwd = cwd
         self.kind = kind
         self.sessionID = sessionID
-        view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        view = TerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        bridge = ProcessBridge(view: view)
         TerminalAppearance.apply(to: view)
-        let clock = clock
-        view.setProcessOutputHandler { clock.touch() }
     }
 
-    func markSpawned() {
+    func start(executable: String, args: [String], environment: [String], execName: String) {
         spawnedAt = Date()
         clock.touch()
         status = .working
+        let process = LocalProcess(delegate: bridge, dispatchQueue: bridge.queue)
+        self.process = process
+        applySize()
+        process.startProcess(executable: executable, args: args, environment: environment,
+                             execName: execName, currentDirectory: cwd)
+    }
+
+    func send(_ bytes: [UInt8]) {
+        guard isRunning else { return }
+        process?.send(data: bytes[...])
+    }
+
+    func terminate() {
+        if isRunning { process?.terminate() }
+    }
+
+    // MARK: Size ownership
+
+    func desktopResized(cols: Int, rows: Int) {
+        desktopSize = OutputBuffer.Size(cols: cols, rows: rows)
+        if sizeOwner == .desktop { applySize() }
+    }
+
+    func claimForRemote(cols: Int, rows: Int) {
+        remoteSize = OutputBuffer.Size(cols: cols, rows: rows)
+        sizeOwner = .remote
+        applySize()
+    }
+
+    func claimForDesktop() {
+        guard sizeOwner == .remote else { return }
+        sizeOwner = .desktop
+        applySize()
+    }
+
+    func remoteAttached() { remoteViewers += 1 }
+
+    func remoteDetached() {
+        remoteViewers = max(0, remoteViewers - 1)
+        if remoteViewers == 0 { claimForDesktop() }
+    }
+
+    private func applySize() {
+        let size = sizeOwner == .remote ? (remoteSize ?? desktopSize) : desktopSize
+        bridge.resize(size, process: process)
     }
 }
 
 @MainActor
-final class TabManager: NSObject, ObservableObject, LocalProcessTerminalViewDelegate {
+final class TabManager: NSObject, ObservableObject, TerminalViewDelegate {
     @Published private(set) var tabs: [TerminalTab] = []
     @Published var selectedID: UUID? {
         didSet { selected?.needsAttention = false }
@@ -83,27 +132,32 @@ final class TabManager: NSObject, ObservableObject, LocalProcessTerminalViewDele
 
     // MARK: Opening
 
-    func open(_ session: SessionInfo) {
+    func tab(id: UUID) -> TerminalTab? { tabs.first { $0.id == id } }
+
+    @discardableResult
+    func open(_ session: SessionInfo, select: Bool = true) -> TerminalTab {
         if let existing = tab(forSession: session.id) {
-            selectedID = existing.id
+            if select { selectedID = existing.id }
             if existing.status == .exited { launch(existing) }
-            return
+            return existing
         }
-        add(TerminalTab(cwd: session.cwd, sessionID: session.id))
+        return add(TerminalTab(cwd: session.cwd, sessionID: session.id), select: select)
     }
 
-    func newSession(in cwd: String) {
-        add(TerminalTab(cwd: cwd, sessionID: nil))
+    @discardableResult
+    func newSession(in cwd: String, select: Bool = true) -> TerminalTab {
+        add(TerminalTab(cwd: cwd, sessionID: nil), select: select)
     }
 
-    func newShell(in cwd: String) {
-        add(TerminalTab(cwd: cwd, sessionID: nil, kind: .shell))
+    @discardableResult
+    func newShell(in cwd: String, select: Bool = true) -> TerminalTab {
+        add(TerminalTab(cwd: cwd, sessionID: nil, kind: .shell), select: select)
     }
 
     func restart(_ tab: TerminalTab) { launch(tab) }
 
     func close(_ tab: TerminalTab) {
-        if tab.status != .exited { tab.view.terminate() }
+        tab.terminate()
         let index = tabs.firstIndex { $0.id == tab.id }
         tabs = tabs.filter { $0.id != tab.id }
         guard selectedID == tab.id else { return }
@@ -137,13 +191,20 @@ final class TabManager: NSObject, ObservableObject, LocalProcessTerminalViewDele
         tabs.forEach { $0.view.font = font }
     }
 
-    func terminateAll() { tabs.filter { $0.status != .exited }.forEach { $0.view.terminate() } }
+    func terminateAll() { tabs.forEach { $0.terminate() } }
 
-    private func add(_ tab: TerminalTab) {
-        tab.view.processDelegate = self
+    private func add(_ tab: TerminalTab, select: Bool) -> TerminalTab {
+        tab.view.terminalDelegate = self
+        tab.bridge.onExit = { [weak self, weak tab] code in
+            Task { @MainActor in
+                guard let self, let tab else { return }
+                self.processExited(tab, code: code)
+            }
+        }
         tabs = tabs + [tab]
-        selectedID = tab.id
+        if select || selectedID == nil { selectedID = tab.id }
         launch(tab)
+        return tab
     }
 
     private func environmentReady(_ env: ShellEnvironment) {
@@ -156,11 +217,11 @@ final class TabManager: NSObject, ObservableObject, LocalProcessTerminalViewDele
     private func launch(_ tab: TerminalTab) {
         guard let env = environment else {
             pendingLaunches.append(tab.id)
-            tab.view.feed(text: "正在读取 shell 环境…\r\n")
+            tab.bridge.inject("正在读取 shell 环境…\r\n")
             return
         }
         guard FileManager.default.fileExists(atPath: tab.cwd) else {
-            tab.view.feed(text: "\r\n目录不存在：\(tab.cwd)\r\n")
+            tab.bridge.inject("\r\n目录不存在：\(tab.cwd)\r\n")
             tab.status = .exited
             return
         }
@@ -169,24 +230,21 @@ final class TabManager: NSObject, ObservableObject, LocalProcessTerminalViewDele
             return
         }
         guard let claude = env.claudePath else {
-            tab.view.feed(text: "\r\n找不到 claude 命令。请确认终端里 `which claude` 有结果。\r\n")
+            tab.bridge.inject("\r\n找不到 claude 命令。请确认终端里 `which claude` 有结果。\r\n")
             tab.status = .exited
             return
         }
         var args: [String] = []
         if UserDefaults.standard.bool(forKey: Self.skipPermissionsKey) { args.append("--dangerously-skip-permissions") }
         if let id = tab.sessionID { args += ["--resume", id] }
-        tab.markSpawned()
-        tab.view.startProcess(executable: claude, args: args, environment: env.asArray,
-                              execName: "claude", currentDirectory: tab.cwd)
+        tab.start(executable: claude, args: args, environment: env.asArray, execName: "claude")
     }
 
     private func launchShell(_ tab: TerminalTab, env: ShellEnvironment) {
         let shell = env.variables["SHELL"] ?? "/bin/zsh"
-        tab.markSpawned()
         // Leading "-" in argv[0] makes it a login shell, like Terminal.app.
-        tab.view.startProcess(executable: shell, args: [], environment: env.asArray,
-                              execName: "-" + (shell as NSString).lastPathComponent, currentDirectory: tab.cwd)
+        tab.start(executable: shell, args: [], environment: env.asArray,
+                  execName: "-" + (shell as NSString).lastPathComponent)
     }
 
     // MARK: New-session binding
@@ -223,16 +281,27 @@ final class TabManager: NSObject, ObservableObject, LocalProcessTerminalViewDele
 
     func clearSelectedAttention() { selected?.needsAttention = false }
 
-    // MARK: LocalProcessTerminalViewDelegate
+    // MARK: TerminalViewDelegate (desktop terminal views)
 
-    func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
-    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
+    private func owner(of view: TerminalView) -> TerminalTab? { tabs.first { $0.view === view } }
+
+    func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+        owner(of: source)?.desktopResized(cols: newCols, rows: newRows)
+    }
+
+    func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        owner(of: source)?.send(Array(data))
+    }
+
+    func setTerminalTitle(source: TerminalView, title: String) {}
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+    func scrolled(source: TerminalView, position: Double) {}
+    func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
 
-    func processTerminated(source: TerminalView, exitCode: Int32?) {
-        guard let tab = tabs.first(where: { $0.view === source }) else { return }
+    private func processExited(_ tab: TerminalTab, code: Int32?) {
         tab.status = .exited
         tab.needsAttention = false
-        tab.view.feed(text: "\r\n\u{1b}[2m[claude 已退出\(exitCode.map { "，代码 \($0)" } ?? "")]\u{1b}[0m\r\n")
+        let name = tab.kind == .shell ? "终端" : "claude"
+        tab.bridge.inject("\r\n\u{1b}[2m[\(name) 已退出\(code.map { "，代码 \($0)" } ?? "")]\u{1b}[0m\r\n")
     }
 }

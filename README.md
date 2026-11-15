@@ -50,8 +50,11 @@ swift test
 
 Regenerate the icon:
 
+The icon source is the Icon Composer file `Resources/AppIcon.icon`; `scripts/bundle.sh`
+compiles it with `actool`. To refresh the README preview after a bundle build:
+
 ```bash
-swift scripts/make-icon.swift && iconutil -c icns Resources/AppIcon.iconset -o Resources/AppIcon.icns
+sips -s format png -Z 256 build.noindex/icon/AppIcon.icns --out Resources/AppIcon-preview.png
 ```
 
 ## Usage

@@ -40,7 +40,7 @@ enum TerminalAppearance {
         NSFont(name: "SF Mono", size: size) ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 
-    @MainActor static func apply(to view: LocalProcessTerminalView) {
+    @MainActor static func apply(to view: TerminalView) {
         view.font = font(size: fontSize)
         view.installColors(ansiHex.map(termColor))
         view.nativeBackgroundColor = background

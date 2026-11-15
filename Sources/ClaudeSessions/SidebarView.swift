@@ -44,7 +44,11 @@ struct SidebarView: View {
         .listStyle(.sidebar)
         .searchable(text: $query, placement: .sidebar, prompt: "搜索标题、内容、路径")
         .searchFocused($searchFocused)
-        .onSubmit(of: .search) { visible.first.map(tabs.open) }
+        // Only a real search opens its top hit; a stray Return in an empty field must not.
+        .onSubmit(of: .search) {
+            guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+            visible.first.map { tabs.open($0) }
+        }
         .safeAreaInset(edge: .top, spacing: 0) { modePicker }
         .safeAreaInset(edge: .bottom, spacing: 0) { footer }
         .overlay { if visible.isEmpty { emptyResult } }

@@ -50,6 +50,9 @@ struct DetailView: View {
                     if let tab = tabs.selected, tab.status == .exited {
                         ExitedBar(tab: tab)
                     }
+                    if let tab = tabs.selected {
+                        RemoteControlBar(tab: tab)
+                    }
                     TerminalContainer(view: tabs.selected?.view)
                         .padding([.leading, .top], TerminalAppearance.padding)
                         .padding(.trailing, TerminalAppearance.padding / 2)
@@ -84,6 +87,7 @@ struct DetailToolbar: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
+            PhoneToolbarButton()
             Button { tabs.newShell(in: cwd) } label: { Label("打开终端", systemImage: "terminal") }
                 .help("在 \(abbreviateHome(cwd)) 打开终端标签 (⌘⇧T)")
             Button { openFolder(cwd) } label: { Label("打开所在文件夹", systemImage: "folder") }
