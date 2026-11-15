@@ -11,6 +11,10 @@
   <a href="#中文">中文说明</a>
 </p>
 
+<p align="center">
+  <img src="Resources/screenshots/desktop.png" alt="Claude Sessions on macOS: all sessions in a sidebar, a Claude Code session running in a tab (content blurred)">
+</p>
+
 ---
 
 `claude --resume` only shows sessions started in the current directory. Once you use Claude Code across many repos, conversations get scattered: you forget which folder a session lived in, you keep five terminal windows open just to watch them, and when you walk away from the desk a long task stalls on a question nobody answers.
@@ -38,6 +42,8 @@ It is a **thin shell around the real `claude` CLI**, not a re-implementation —
 
 ## Phone access
 
+<img src="Resources/screenshots/phone.png" width="260" align="right" alt="Phone web client: session list (content blurred)">
+
 Open the phone icon in the toolbar, switch it on and scan the QR code with your phone camera.
 
 - Works on the same Wi‑Fi, or from anywhere via [Tailscale](https://tailscale.com) (log in to the same account on both devices).
@@ -46,6 +52,8 @@ Open the phone icon in the toolbar, switch it on and scan the QR code with your 
 - Optionally keeps the Mac awake while phone access is on.
 
 > Plain HTTP on your private network. Don't expose the port to the public internet; use Tailscale for remote access.
+
+<br clear="right">
 
 ## Requirements
 
@@ -146,10 +154,14 @@ MIT
 
 ### 功能
 
+<img src="Resources/screenshots/phone.png" width="220" align="right" alt="手机端会话列表（内容已打码）">
+
 - 所有会话一个列表，可按最近活动或按项目分组；标题沿用 Claude Code 自己生成或自定义的标题。
 - 搜索（`⌘K`）、新建会话（`⌘T`）、置顶、重命名、隐藏、复制恢复命令。
 - 本质是给官方 `claude` 命令加壳，不是重写：`/model`、斜杠命令、Skills、Hooks、MCP、权限确认、贴图都照常可用，CLI 升级后自动跟上。
 - **手机访问（可选）**：工具栏点手机图标开启，用手机相机扫码即可。同一 Wi‑Fi 直连，或用 [Tailscale](https://tailscale.com) 在外面也能连。只接受局域网 / Tailscale 内的设备，需要配对令牌（可随时“重置配对”让旧手机失效），数据不经过任何第三方服务器。可添加到手机主屏当 App 用，手机上能看会话列表、继续对话、开完整终端；电脑上一键收回。
+
+<br clear="right">
 
 ### 安装
 
