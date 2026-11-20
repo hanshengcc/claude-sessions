@@ -1,5 +1,6 @@
 import AppKit
 import SwiftTerm
+import SessionCore
 import SwiftUI
 
 enum Theme {
@@ -7,6 +8,7 @@ enum Theme {
     static let accentNS = NSColor(srgbRed: 0.89, green: 0.46, blue: 0.30, alpha: 1)
     static let working = Color(red: 0.36, green: 0.78, blue: 0.47)
     static let attention = Color(red: 0.98, green: 0.66, blue: 0.24)
+    static let agy = Color(red: 0.36, green: 0.58, blue: 0.98)
     static let terminalBackground = Color(nsColor: TerminalAppearance.background)
     static let chrome = Color(nsColor: TerminalAppearance.chrome)
 }
@@ -102,8 +104,9 @@ func shellQuote(_ path: String) -> String {
     "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
 
-func resumeCommand(cwd: String, sessionID: String) -> String {
-    "cd \(shellQuote(cwd)) && claude --resume \(sessionID)"
+func resumeCommand(cwd: String, sessionID: String, agent: Agent) -> String {
+    let resume = agent == .agy ? "agy --conversation" : "claude --resume"
+    return "cd \(shellQuote(cwd)) && \(resume) \(sessionID)"
 }
 
 func openInTerminalApp(_ path: String) {

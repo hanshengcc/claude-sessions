@@ -27,10 +27,11 @@ struct ContentView: View {
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.prompt = "在此新建会话"
-        panel.message = "选择 claude 的工作目录"
+        let agent = ui.newSessionAgent
+        panel.message = "选择 \(agent.rawValue) 的工作目录"
         panel.directoryURL = tabs.selected.map { URL(fileURLWithPath: $0.cwd) }
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        tabs.newSession(in: url.path)
+        tabs.newSession(in: url.path, agent: agent)
     }
 }
 
@@ -68,7 +69,7 @@ struct DetailView: View {
     private var title: String {
         guard let tab = tabs.selected else { return "Claude Sessions" }
         if let id = tab.sessionID, let session = store.session(id: id) { return store.displayTitle(session) }
-        return "新会话"
+        return tab.kind == .agy ? "新 agy 会话" : "新会话"
     }
 
     private var subtitle: String {
@@ -89,7 +90,7 @@ struct DetailToolbar: ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             PhoneToolbarButton()
             Button { tabs.newShell(in: cwd) } label: { Label("打开终端", systemImage: "terminal") }
-                .help("在 \(abbreviateHome(cwd)) 打开终端标签 (⌘⇧T)")
+                .help("在 \(abbreviateHome(cwd)) 打开终端标签 (⌘T)")
             Button { openFolder(cwd) } label: { Label("打开所在文件夹", systemImage: "folder") }
                 .help("在 Finder 中打开 \(abbreviateHome(cwd)) (⌘⇧O)")
             Menu {
@@ -98,7 +99,7 @@ struct DetailToolbar: ToolbarContent {
                 Button { ui.copy(cwd, message: "已复制路径") } label: { Label("复制路径", systemImage: "link") }
                 if let tab = tabs.selected, let id = tab.sessionID {
                     Divider()
-                    Button { ui.copy(resumeCommand(cwd: tab.cwd, sessionID: id), message: "已复制恢复命令") } label: {
+                    Button { ui.copy(resumeCommand(cwd: tab.cwd, sessionID: id, agent: tab.kind.agent ?? .claude), message: "已复制恢复命令") } label: {
                         Label("复制恢复命令", systemImage: "doc.on.doc")
                     }
                 }
@@ -137,7 +138,7 @@ struct EmptyStateView: View {
             if !store.sessions.isEmpty { recentList }
             HStack(spacing: 18) {
                 hint("⌘K", "搜索")
-                hint("⌘T", "新建会话")
+                hint("⌘N", "新建会话")
                 hint("⌘1–9", "切换标签")
                 hint("⇧↩", "换行")
             }

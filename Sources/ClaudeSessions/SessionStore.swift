@@ -12,6 +12,8 @@ final class SessionStore: ObservableObject {
     private let root = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude/projects")
     private let cacheURL: URL
     private var cache: [String: SessionInfo] = [:]
+    private var agyStamp = ""
+    private var agySessions: [SessionInfo] = []
     private var isScanning = false
     private var timer: Timer?
     private let defaults = UserDefaults.standard
@@ -25,7 +27,7 @@ final class SessionStore: ObservableObject {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("ClaudeSessions")
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        cacheURL = support.appendingPathComponent("index-cache-v2.json")
+        cacheURL = support.appendingPathComponent("index-cache-v3.json")
         loadCache()
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
@@ -38,19 +40,31 @@ final class SessionStore: ObservableObject {
     func refresh() {
         guard !isScanning else { return }
         isScanning = true
-        let root = root, cache = cache
+        let root = root, cache = cache, previousStamp = agyStamp, previousAgy = agySessions
         Task.detached(priority: .utility) {
-            let result = SessionIndex.scan(root: root, cache: cache)
-            await MainActor.run { self.apply(result) }
+            let claude = SessionIndex.scan(root: root, cache: cache)
+            let stamp = AgyIndex.stamp()
+            let scanned = stamp == previousStamp ? previousAgy : AgyIndex.scan()
+            // A failed read keeps the old list and forgets the stamp, so the next tick retries.
+            await MainActor.run {
+                self.apply(claude: claude, agy: scanned ?? previousAgy, agyStamp: scanned == nil ? "" : stamp)
+            }
         }
     }
 
-    private func apply(_ result: [SessionInfo]) {
+    private func apply(claude: [SessionInfo], agy: [SessionInfo], agyStamp stamp: String) {
         isScanning = false
+        agyStamp = stamp
+        agySessions = agy
+        let result = Self.merged(claude, agy)
         guard result != sessions else { return }
         sessions = result
         cache = Dictionary(result.map { ($0.file, $0) }, uniquingKeysWith: { a, _ in a })
         saveCache()
+    }
+
+    private static func merged(_ claude: [SessionInfo], _ agy: [SessionInfo]) -> [SessionInfo] {
+        (claude + agy).sorted { $0.updatedAt > $1.updatedAt }
     }
 
     private func loadCache() {
@@ -75,7 +89,9 @@ final class SessionStore: ObservableObject {
 
     /// Look up a session by id even before the first scan finishes.
     func findSession(id: String) -> SessionInfo? {
-        session(id: id) ?? SessionIndex.scan(root: root, cache: cache).first { $0.id == id }
+        session(id: id)
+            ?? SessionIndex.scan(root: root, cache: cache).first { $0.id == id }
+            ?? AgyIndex.scan()?.first { $0.id == id }
     }
 
     func displayTitle(_ session: SessionInfo) -> String { aliases[session.id] ?? session.title }
@@ -85,7 +101,8 @@ final class SessionStore: ObservableObject {
         let filtered = sessions.filter { session in
             guard showHidden || !hidden.contains(session.id) else { return false }
             guard !terms.isEmpty else { return true }
-            let haystack = [displayTitle(session), session.firstPrompt, session.lastPrompt, session.cwd, session.id]
+            let haystack = [displayTitle(session), session.firstPrompt, session.lastPrompt, session.cwd, session.id,
+                            session.agent.rawValue]
                 .joined(separator: " ").lowercased()
             return terms.allSatisfy(haystack.contains)
         }

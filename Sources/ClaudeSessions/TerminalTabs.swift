@@ -6,9 +6,19 @@ enum TabStatus {
     case working, idle, exited
 }
 
-/// What a tab runs: a claude session, or a plain login shell.
-enum TabKind {
-    case claude, shell
+/// What a tab runs: an agent session (claude / agy), or a plain login shell.
+enum TabKind: Equatable {
+    case claude, agy, shell
+
+    init(_ agent: Agent) { self = agent == .agy ? .agy : .claude }
+
+    var agent: Agent? {
+        switch self {
+        case .claude: return .claude
+        case .agy: return .agy
+        case .shell: return nil
+        }
+    }
 }
 
 /// Who decides the pty size: the Mac window, or a phone that is driving the session.
@@ -41,7 +51,7 @@ final class TerminalTab: ObservableObject, Identifiable {
         self.cwd = cwd
         self.kind = kind
         self.sessionID = sessionID
-        view = TerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        view = CopyOnSelectTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         bridge = ProcessBridge(view: view)
         TerminalAppearance.apply(to: view)
     }
@@ -141,12 +151,12 @@ final class TabManager: NSObject, ObservableObject, TerminalViewDelegate {
             if existing.status == .exited { launch(existing) }
             return existing
         }
-        return add(TerminalTab(cwd: session.cwd, sessionID: session.id), select: select)
+        return add(TerminalTab(cwd: session.cwd, sessionID: session.id, kind: TabKind(session.agent)), select: select)
     }
 
     @discardableResult
-    func newSession(in cwd: String, select: Bool = true) -> TerminalTab {
-        add(TerminalTab(cwd: cwd, sessionID: nil), select: select)
+    func newSession(in cwd: String, agent: Agent = .claude, select: Bool = true) -> TerminalTab {
+        add(TerminalTab(cwd: cwd, sessionID: nil, kind: TabKind(agent)), select: select)
     }
 
     @discardableResult
@@ -225,19 +235,33 @@ final class TabManager: NSObject, ObservableObject, TerminalViewDelegate {
             tab.status = .exited
             return
         }
-        if tab.kind == .shell {
+        guard let agent = tab.kind.agent else {
             launchShell(tab, env: env)
             return
         }
-        guard let claude = env.claudePath else {
-            tab.bridge.inject("\r\n找不到 claude 命令。请确认终端里 `which claude` 有结果。\r\n")
+        let command = agent.rawValue
+        guard let executable = agent == .agy ? env.agyPath : env.claudePath else {
+            tab.bridge.inject("\r\n找不到 \(command) 命令。请确认终端里 `which \(command)` 有结果。\r\n")
             tab.status = .exited
             return
         }
+        // Both CLIs share the permission flag; only the resume flag differs.
         var args: [String] = []
         if UserDefaults.standard.bool(forKey: Self.skipPermissionsKey) { args.append("--dangerously-skip-permissions") }
-        if let id = tab.sessionID { args += ["--resume", id] }
-        tab.start(executable: claude, args: args, environment: env.asArray, execName: "claude")
+        guard agent == .claude, let id = tab.sessionID else {
+            if let id = tab.sessionID { args += ["--conversation", id] }
+            tab.start(executable: executable, args: args, environment: env.asArray, execName: command)
+            return
+        }
+        // A session still running in the background refuses --resume; attach to it instead.
+        Task.detached(priority: .userInitiated) {
+            let attachID = env.backgroundAttachID(for: id)
+            await MainActor.run {
+                guard self.tabs.contains(where: { $0 === tab }) else { return }
+                let finalArgs = attachID.map { ["attach", $0] } ?? args + ["--resume", id]
+                tab.start(executable: executable, args: finalArgs, environment: env.asArray, execName: command)
+            }
+        }
     }
 
     private func launchShell(_ tab: TerminalTab, env: ShellEnvironment) {
@@ -249,16 +273,20 @@ final class TabManager: NSObject, ObservableObject, TerminalViewDelegate {
 
     // MARK: New-session binding
 
-    /// A fresh `claude` gets its session id only once it writes a .jsonl;
-    /// attach the newest unclaimed session in the same folder.
+    /// A fresh agent gets its session id only once it writes its record;
+    /// attach the newest unclaimed session of the same agent in the same folder.
     func bindNewSessions(_ sessions: [SessionInfo]) {
-        let claimed = Set(tabs.compactMap(\.sessionID))
-        for tab in tabs where tab.sessionID == nil && tab.kind == .claude {
+        var claimed = Set(tabs.compactMap(\.sessionID))
+        for tab in tabs where tab.sessionID == nil {
+            guard let agent = tab.kind.agent else { continue }
             let match = sessions.first { session in
-                session.cwd == tab.cwd && !claimed.contains(session.id)
+                session.agent == agent && session.cwd == tab.cwd && !claimed.contains(session.id)
                     && (session.startedAt ?? session.updatedAt) >= tab.spawnedAt.addingTimeInterval(-5)
             }
-            if let match { tab.sessionID = match.id }
+            if let match {
+                tab.sessionID = match.id
+                claimed.insert(match.id)
+            }
         }
     }
 
@@ -270,7 +298,7 @@ final class TabManager: NSObject, ObservableObject, TerminalViewDelegate {
         for tab in tabs where tab.status != .exited {
             let quiet = now.timeIntervalSince(tab.clock.lastOutput) > Self.quietSeconds
             let next: TabStatus = quiet ? .idle : .working
-            if tab.kind == .claude, tab.status == .working, next == .idle, tab.id != selectedID || !appActive {
+            if tab.kind != .shell, tab.status == .working, next == .idle, tab.id != selectedID || !appActive {
                 tab.needsAttention = true
             }
             if tab.status != next { tab.status = next }
@@ -298,10 +326,17 @@ final class TabManager: NSObject, ObservableObject, TerminalViewDelegate {
     func scrolled(source: TerminalView, position: Double) {}
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
 
+    /// OSC 52 write. Claude Code's fullscreen TUI owns mouse selection and copies through this;
+    /// SwiftTerm's default implementation drops it. Reads stay unanswered so programs can't snoop.
+    func clipboardCopy(source: TerminalView, content: Data) {
+        guard let text = String(data: content, encoding: .utf8), !text.isEmpty else { return }
+        copyToPasteboard(text)
+    }
+
     private func processExited(_ tab: TerminalTab, code: Int32?) {
         tab.status = .exited
         tab.needsAttention = false
-        let name = tab.kind == .shell ? "终端" : "claude"
+        let name = tab.kind.agent?.rawValue ?? "终端"
         tab.bridge.inject("\r\n\u{1b}[2m[\(name) 已退出\(code.map { "，代码 \($0)" } ?? "")]\u{1b}[0m\r\n")
     }
 }

@@ -1,29 +1,36 @@
 import Foundation
+import SessionCore
 
 /// Environment captured from the user's login shell, so a Finder-launched app
 /// sees the same PATH / API settings as the terminal does.
 struct ShellEnvironment {
     let variables: [String: String]
     let claudePath: String?
+    let agyPath: String?
 
     private static let envMarker = "__CLAUDE_SESSIONS_ENV__"
     private static let pathMarker = "__CLAUDE_SESSIONS_PATH__"
+    private static let agyMarker = "__CLAUDE_SESSIONS_AGY__"
     private static let timeoutSeconds: TimeInterval = 8
     private static let fallbackPaths = ["~/.local/bin", "~/.claude/local", "/opt/homebrew/bin", "/usr/local/bin"]
 
     static func capture() -> ShellEnvironment {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let script = "printf '\(envMarker)\\n'; env; printf '\(pathMarker)\\n'; "
-            + "whence -p claude 2>/dev/null || command -v claude"
+            + "whence -p claude 2>/dev/null || command -v claude; printf '\(agyMarker)\\n'; "
+            + "whence -p agy 2>/dev/null || command -v agy"
         let output = run(shell, args: ["-l", "-i", "-c", script]) ?? ""
         var variables = parseEnv(output)
         if variables["PATH"] == nil { variables["PATH"] = ProcessInfo.processInfo.environment["PATH"] }
         variables["TERM"] = "xterm-256color"
         variables["COLORTERM"] = "truecolor"
         if variables["LANG"] == nil { variables["LANG"] = "en_US.UTF-8" }
-        let found = output.components(separatedBy: pathMarker + "\n").last?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return ShellEnvironment(variables: variables, claudePath: resolveClaude(found))
+        let paths = output.components(separatedBy: pathMarker + "\n").last ?? ""
+        let parts = paths.components(separatedBy: agyMarker + "\n")
+        let trimmed = { (text: String?) in text?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return ShellEnvironment(variables: variables,
+                                claudePath: resolve("claude", candidate: trimmed(parts.first)),
+                                agyPath: resolve("agy", candidate: trimmed(parts.count > 1 ? parts[1] : nil)))
     }
 
     var asArray: [String] { variables.map { "\($0.key)=\($0.value)" } }
@@ -47,11 +54,12 @@ struct ShellEnvironment {
         return result
     }
 
-    private static func resolveClaude(_ candidate: String?) -> String? {
+    /// `whence -p` skips aliases, so `candidate` is a real path or empty.
+    private static func resolve(_ command: String, candidate: String?) -> String? {
         let fm = FileManager.default
         if let candidate, candidate.hasPrefix("/"), fm.isExecutableFile(atPath: candidate) { return candidate }
         return fallbackPaths
-            .map { ($0 as NSString).expandingTildeInPath + "/claude" }
+            .map { ($0 as NSString).expandingTildeInPath + "/" + command }
             .first { fm.isExecutableFile(atPath: $0) }
     }
 
@@ -65,7 +73,15 @@ struct ShellEnvironment {
         return base
     }
 
-    private static func run(_ executable: String, args: [String]) -> String? {
+    /// `claude attach` id when `sessionID` is a running background session. Blocking; call off the main thread.
+    func backgroundAttachID(for sessionID: String) -> String? {
+        guard let claudePath,
+              let output = Self.run(claudePath, args: ["agents", "--json"], environment: variables)
+        else { return nil }
+        return ClaudeBackground.attachID(for: sessionID, in: Data(output.utf8))
+    }
+
+    private static func run(_ executable: String, args: [String], environment: [String: String]? = nil) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = args
@@ -73,11 +89,11 @@ struct ShellEnvironment {
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
-        process.environment = baseEnvironment()
+        process.environment = environment ?? baseEnvironment()
         do {
             try process.run()
         } catch {
-            NSLog("ClaudeSessions: shell env capture failed: %@", error.localizedDescription)
+            NSLog("ClaudeSessions: running %@ failed: %@", executable, error.localizedDescription)
             return nil
         }
         let deadline = DispatchTime.now() + timeoutSeconds

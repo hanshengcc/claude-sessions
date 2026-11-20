@@ -1,4 +1,5 @@
 import AppKit
+import SessionCore
 import SwiftTerm
 import SwiftUI
 
@@ -31,6 +32,7 @@ struct ClaudeSessionsApp: App {
 final class UIState: ObservableObject {
     @Published var focusSearchToken = 0
     @Published var newSessionToken = 0
+    private(set) var newSessionAgent: Agent = .claude
     @Published private(set) var toast: String?
     private var toastTask: Task<Void, Never>?
 
@@ -45,6 +47,12 @@ final class UIState: ObservableObject {
             guard !Task.isCancelled else { return }
             self?.toast = nil
         }
+    }
+
+    /// Ask the window to pick a folder and start `agent` there.
+    func requestNewSession(_ agent: Agent) {
+        newSessionAgent = agent
+        newSessionToken += 1
     }
 
     func copy(_ text: String, message: String) {
@@ -67,12 +75,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = remote
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.reclaimFromPhone(event)
-            return Self.handleShiftEnter(event) ? nil : event
+            return TerminalKeyRouter.handle(event) ? nil : event
         }
         handleLaunchArguments(CommandLine.arguments)
     }
 
-    /// `--new <dir>` starts a session in dir, `--shell <dir>` opens a shell tab, `--open <session-id>` resumes one.
+    /// `--new <dir>` starts a session in dir (`--new-agy <dir>` for agy), `--shell <dir>` opens a shell tab, `--open <session-id>` resumes one.
     private func handleLaunchArguments(_ args: [String]) {
         func value(after flag: String) -> String? {
             guard let index = args.firstIndex(of: flag), args.indices.contains(index + 1) else { return nil }
@@ -80,6 +88,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let dir = value(after: "--new") {
             tabs.newSession(in: (dir as NSString).standardizingPath)
+        }
+        if let dir = value(after: "--new-agy") {
+            tabs.newSession(in: (dir as NSString).standardizingPath, agent: .agy)
         }
         if let dir = value(after: "--shell") {
             tabs.newShell(in: (dir as NSString).standardizingPath)
@@ -108,23 +119,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard running > 0 else { return .terminateNow }
         let alert = NSAlert()
         alert.messageText = "还有 \(running) 个会话在运行"
-        alert.informativeText = "退出会结束这些 claude 进程。会话记录都已保存，之后可以从列表里继续。"
+        alert.informativeText = "退出会结束这些 claude / agy 进程。会话记录都已保存，之后可以从列表里继续。"
         alert.addButton(withTitle: "退出")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
         tabs.terminateAll()
         return .terminateNow
-    }
-
-    /// Shift+Enter inserts a newline in Claude Code's prompt (same bytes as `/terminal-setup`).
-    private static func handleShiftEnter(_ event: NSEvent) -> Bool {
-        let returnKeyCode: UInt16 = 36
-        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard event.keyCode == returnKeyCode, mods == .shift,
-              let terminal = event.window?.firstResponder as? TerminalView
-        else { return false }
-        terminal.send(data: ArraySlice(Array("\u{1b}\r".utf8)))
-        return true
     }
 }
 
@@ -135,10 +135,13 @@ struct AppCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("新建会话…") { ui.newSessionToken += 1 }
-                .keyboardShortcut("t")
+            // ⌘T opens a shell tab, like Terminal.app.
             Button("新建终端标签") { tabs.newShell(in: tabs.selected?.cwd ?? NSHomeDirectory()) }
-                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .keyboardShortcut("t")
+            Button("新建会话…") { ui.requestNewSession(.claude) }
+                .keyboardShortcut("n")
+            Button("新建 agy 会话…") { ui.requestNewSession(.agy) }
+                .keyboardShortcut("n", modifiers: [.command, .option])
             Button("打开所在文件夹") { openFolder(tabs.selected?.cwd ?? NSHomeDirectory()) }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             Button("关闭标签") { tabs.closeSelected() }
@@ -183,7 +186,7 @@ struct SettingsView: View {
                 Toggle(isOn: $skipPermissions) {
                     Label {
                         Text("跳过权限确认")
-                        Text("启动时带 --dangerously-skip-permissions，和你终端里的 claude 别名一致。只影响之后新开的标签。")
+                        Text("启动时带 --dangerously-skip-permissions，claude 和 agy 都适用，和你终端里的别名一致。只影响之后新开的标签。")
                     } icon: {
                         Image(systemName: "bolt.shield")
                     }
@@ -214,7 +217,12 @@ struct SettingsView: View {
                     Label("claude 路径", systemImage: "terminal")
                 }
                 LabeledContent {
-                    Text("~/.claude/projects").textSelection(.enabled)
+                    Text(tabs.environment.map { $0.agyPath ?? "未找到" } ?? "读取中…").textSelection(.enabled)
+                } label: {
+                    Label("agy 路径", systemImage: "terminal")
+                }
+                LabeledContent {
+                    Text("~/.claude/projects\n~/.gemini/antigravity-cli").textSelection(.enabled)
                 } label: {
                     Label("会话目录", systemImage: "folder")
                 }

@@ -204,6 +204,11 @@ h1 { margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -0.5px; }
   background: var(--accent); color: #fff; flex: none;
 }
 .pill.secondary { background: var(--surface-3); color: var(--text); }
+.pill.agy { background: #5b94fa; }
+.agent-tag {
+  flex: none; font-size: 10px; font-weight: 600; line-height: 1; padding: 3px 5px;
+  border-radius: 999px; color: #8fb5ff; background: rgba(91, 148, 250, .16);
+}
 .pill:active { opacity: .75; }
 .path-input { display: flex; gap: 8px; margin-bottom: 12px; }
 .path-input input {

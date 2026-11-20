@@ -72,3 +72,15 @@ struct CompactLabelStyle: LabelStyle {
         }
     }
 }
+
+/// Small "agy" tag that tells agy sessions apart from Claude ones.
+struct AgentBadge: View {
+    var body: some View {
+        Text("agy")
+            .font(.system(size: 9, weight: .semibold, design: .rounded))
+            .foregroundStyle(Theme.agy)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(Theme.agy.opacity(0.16)))
+    }
+}

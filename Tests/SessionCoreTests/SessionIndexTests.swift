@@ -65,7 +65,7 @@ private func jsonl(_ lines: [String]) -> Data { Data(lines.joined(separator: "\n
     // Act
     let first = SessionIndex.scan(root: root)
     let cached = first.map { info in
-        SessionInfo(id: info.id, file: info.file, cwd: info.cwd, gitBranch: "", title: "from-cache",
+        SessionInfo(id: info.id, agent: .claude, file: info.file, cwd: info.cwd, gitBranch: "", title: "from-cache",
                     firstPrompt: "", lastPrompt: "", startedAt: nil, updatedAt: info.updatedAt,
                     size: info.size, cacheKey: info.cacheKey)
     }

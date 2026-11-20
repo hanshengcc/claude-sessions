@@ -1,8 +1,16 @@
 import Foundation
 
-/// One Claude Code session file (`~/.claude/projects/<dir>/<id>.jsonl`).
+/// Which coding agent CLI owns a session.
+public enum Agent: String, Codable, CaseIterable, Sendable {
+    case claude, agy
+
+    public var displayName: String { self == .claude ? "Claude" : "agy" }
+}
+
+/// One agent session: a Claude Code `.jsonl` file or an agy conversation.
 public struct SessionInfo: Codable, Hashable, Identifiable, Sendable {
     public let id: String
+    public let agent: Agent
     public let file: String
     public let cwd: String
     public let gitBranch: String
@@ -152,6 +160,7 @@ public enum SessionIndex {
         guard summary.hasContent else { return nil }
         return SessionInfo(
             id: url.deletingPathExtension().lastPathComponent,
+            agent: .claude,
             file: url.path,
             cwd: summary.cwd,
             gitBranch: summary.gitBranch,

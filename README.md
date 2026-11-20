@@ -34,9 +34,12 @@ It is a **thin shell around the real `claude` CLI**, not a re-implementation —
 
 - **All sessions, one list** — every folder, sorted by recent activity or grouped by project; titles come from Claude Code's own AI-generated or custom titles.
 - **Search** titles, first prompts and paths (`⌘K`).
-- **Tabs** — several sessions at once, each a real `claude` process in a native terminal ([SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)).
+- **Tabs** — several sessions at once, each a real `claude` process in a native terminal ([SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)). `⌘T` opens a plain shell tab.
+- **agy sessions too** — sessions from the Antigravity CLI (`~/.gemini/antigravity-cli`) show up in the same list, tagged `agy`; start one with `⌘⌥N`.
+- **Background sessions** — a Claude session still running in the background (`claude agents`) is attached with `claude attach` instead of failing on `--resume`.
+- **Copy like a modern terminal** — selecting text copies it, `⌃C` copies a selection, and Claude Code's fullscreen mode copies its own mouse selection.
 - **Status at a glance** — working / waiting for you / idle, plus a Dock badge for sessions that need a reply.
-- **New session anywhere** — pick any folder or one of your recent projects (`⌘T`).
+- **New session anywhere** — pick any folder or one of your recent projects (`⌘N`).
 - **Organise** — pin, rename (local alias), hide; copy the `cd … && claude --resume …` command.
 - **Phone access (optional)** — a built-in web client (installable as a home-screen app) to browse sessions, continue conversations and use a full terminal from your phone. Hand a tab back to the desktop with one click.
 
@@ -76,12 +79,15 @@ The app is signed locally, so Gatekeeper won't quarantine it.
 | Shortcut | Action |
 | --- | --- |
 | `⌘K` | Search sessions |
-| `⌘T` | New session in a folder |
+| `⌘T` | New terminal tab (like Terminal.app) |
+| `⌘N` / `⌘⌥N` | New Claude / agy session in a folder |
 | `⌘W` | Close tab |
 | `⌘1`–`⌘9` | Switch tab |
 | `⌘⇧[` / `⌘⇧]` | Previous / next tab |
 | `⌘+` / `⌘-` / `⌘0` | Terminal font size |
 | `⇧↩` | Newline in the Claude prompt |
+
+**Copy & keys.** Selecting text copies it. `⌃C` copies when text is selected, otherwise interrupts. `⌘` shortcuts never reach the program, so `⌘C` can't turn into a typed `c`.
 
 Open the app on a folder or session from your terminal:
 
@@ -97,6 +103,7 @@ open -a "Claude Sessions" --args --open <session-id>
 - **Permissions flag.** By default sessions start with `--dangerously-skip-permissions`, matching a common `claude` alias. Turn it off in Settings (`⌘,`) to get Claude Code's permission prompts back.
 - **Environment.** The app reads your login shell's environment once at launch (`$SHELL -l -i`), so `PATH`, API keys and other variables match your terminal.
 - **macOS privacy prompts.** Files that `claude` touches are attributed to this app (as they would be to Terminal or iTerm). If macOS blocks access, allow Claude Sessions in *System Settings → Privacy & Security*.
+- **Mouse selection in Claude Code.** With `"tui": "fullscreen"` Claude Code tracks the mouse and copies selections itself. If it switches fullscreen off on its own (it does so for a version after launches that died while starting), run `/tui fullscreen` once to turn it back on; until then the app's own copy-on-select still works.
 - **Status detection** is a heuristic: a session is "working" while it produces output and "waiting" after 2 s of silence.
 
 ## FAQ
@@ -116,7 +123,7 @@ swift test                      # unit tests for the session index and HTTP core
 
 ```
 Sources/
-  SessionCore/          # pure, tested: parse ~/.claude/projects/*/*.jsonl, HTTP parsing, output buffer
+  SessionCore/          # pure, tested: Claude + agy session index, background attach, HTTP parsing, output buffer
   ClaudeSessions/       # SwiftUI app: sidebar, tabs, SwiftTerm terminals, phone server
 Web/                    # phone web client (xterm.js), bundled into the app
 Resources/AppIcon.icon  # Icon Composer source, compiled by bundle.sh with actool
@@ -157,7 +164,10 @@ MIT
 <img src="Resources/screenshots/phone.png" width="220" align="right" alt="手机端会话列表（内容已打码）">
 
 - 所有会话一个列表，可按最近活动或按项目分组；标题沿用 Claude Code 自己生成或自定义的标题。
-- 搜索（`⌘K`）、新建会话（`⌘T`）、置顶、重命名、隐藏、复制恢复命令。
+- 搜索（`⌘K`）、新建会话（`⌘N`）、置顶、重命名、隐藏、复制恢复命令。`⌘T` 开普通终端标签。
+- **也支持 agy**：Antigravity CLI 的会话（`~/.gemini/antigravity-cli`）出现在同一个列表里，带 `agy` 标记；`⌘⌥N` 新建。
+- **后台会话**：还在后台运行的 Claude 会话（`claude agents`）会用 `claude attach` 接上，不会因为 `--resume` 被拒而打不开。
+- **复制习惯同现代终端**：选中即复制；有选区时 `⌃C` 复制，否则中断；`⌘` 组合键不会漏给程序（`⌘C` 不会变成输入 `c`）。Claude Code 全屏模式下由它自己处理鼠标选择和复制；如果它自动关了全屏，在 Claude 里执行一次 `/tui fullscreen` 即可恢复。
 - 本质是给官方 `claude` 命令加壳，不是重写：`/model`、斜杠命令、Skills、Hooks、MCP、权限确认、贴图都照常可用，CLI 升级后自动跟上。
 - **手机访问（可选）**：工具栏点手机图标开启，用手机相机扫码即可。同一 Wi‑Fi 直连，或用 [Tailscale](https://tailscale.com) 在外面也能连。只接受局域网 / Tailscale 内的设备，需要配对令牌（可随时“重置配对”让旧手机失效），数据不经过任何第三方服务器。可添加到手机主屏当 App 用，手机上能看会话列表、继续对话、开完整终端；电脑上一键收回。
 

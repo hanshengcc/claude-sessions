@@ -166,6 +166,7 @@ final class RemoteController: ObservableObject {
         let sessions = store.visible(query: "", showHidden: false).prefix(Self.sessionLimit).map { session -> [String: Any] in
             [
                 "id": session.id,
+                "agent": session.agent.rawValue,
                 "title": store.displayTitle(session),
                 "project": session.projectName,
                 "cwd": abbreviateHome(session.cwd),
@@ -191,20 +192,14 @@ final class RemoteController: ObservableObject {
         [
             "id": tab.id.uuidString,
             "sessionId": tab.sessionID ?? NSNull(),
-            "kind": tab.kind == .shell ? "shell" : "claude",
-            "title": title(of: tab),
+            "kind": tab.kind.agent?.rawValue ?? "shell",
+            "title": store.title(of: tab),
             "project": (tab.cwd as NSString).lastPathComponent,
             "cwd": abbreviateHome(tab.cwd),
             "status": statusName(tab),
             "attention": tab.needsAttention,
             "owner": tab.sizeOwner == .remote ? "remote" : "desktop",
         ]
-    }
-
-    private func title(of tab: TerminalTab) -> String {
-        if tab.kind == .shell { return "终端 · \((tab.cwd as NSString).lastPathComponent)" }
-        if let id = tab.sessionID, let session = store.session(id: id) { return store.displayTitle(session) }
-        return "新会话 · \((tab.cwd as NSString).lastPathComponent)"
     }
 
     private func statusName(_ tab: TerminalTab) -> String {
@@ -235,9 +230,10 @@ final class RemoteController: ObservableObject {
         guard FileManager.default.fileExists(atPath: cwd, isDirectory: &isDirectory), isDirectory.boolValue else {
             return connection.respondJSON(["error": "目录不存在"], status: 400)
         }
-        let tab = payload["kind"] as? String == "shell"
+        let kind = payload["kind"] as? String
+        let tab = kind == "shell"
             ? tabs.newShell(in: cwd, select: false)
-            : tabs.newSession(in: cwd, select: false)
+            : tabs.newSession(in: cwd, agent: kind.flatMap(Agent.init(rawValue:)) ?? .claude, select: false)
         connection.respondJSON(["tabId": tab.id.uuidString])
     }
 

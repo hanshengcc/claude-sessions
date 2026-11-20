@@ -10,6 +10,9 @@ const FONT_MIN = 8;
 const FONT_MAX = 18;
 const FONT_DEFAULT = 12;
 const DUMP_LINES = 400;
+const WHEEL_FLUSH_MS = 50;
+const WHEEL_MAX_EVENTS = 20;
+const LINES_PER_WHEEL = 3;
 const TOKEN_KEY = 'cs_token';
 const FONT_KEY = 'cs_font';
 
@@ -231,6 +234,7 @@ function tabRow(tab) {
   iconBox.append(icon(tab.kind === 'shell' ? ICONS.terminal : state === 'attention' ? ICONS.bell : ICONS.bubbleFill));
   const main = el('div', 'row-main');
   const top = el('div', 'row-top');
+  if (tab.kind === 'agy') top.append(el('span', 'agent-tag', 'agy'));
   top.append(el('div', 'row-title', tab.title));
   const status = el('span', `state ${state}`, STATUS_TEXT[state]);
   if (state === 'working') {
@@ -256,6 +260,7 @@ function sessionRow(session) {
   iconBox.append(icon(ICONS.bubble));
   const main = el('div', 'row-main');
   const top = el('div', 'row-top');
+  if (session.agent === 'agy') top.append(el('span', 'agent-tag', 'agy'));
   top.append(el('div', 'row-title', session.title));
   if (session.pinned) top.append(el('span', 'pin', '置顶'));
   top.append(el('span', 'row-time', relativeTime(session.updatedAt)));
@@ -309,9 +314,11 @@ function openNewSheet() {
       main.append(el('div', 'project-name', project.name), el('div', 'project-path', project.display));
       const claude = el('button', 'pill', 'Claude');
       claude.addEventListener('click', () => createTab(project.path, 'claude'));
+      const agy = el('button', 'pill agy', 'agy');
+      agy.addEventListener('click', () => createTab(project.path, 'agy'));
       const shell = el('button', 'pill secondary', '终端');
       shell.addEventListener('click', () => createTab(project.path, 'shell'));
-      row.append(main, claude, shell);
+      row.append(main, claude, agy, shell);
       group.append(row);
     });
     content.append(group);
@@ -422,7 +429,8 @@ function renderHeader() {
   $('term-status').textContent = !connected && !session.gone && !session.exited
     ? '重新连接中…'
     : `${STATUS_TEXT[state]} · ${meta.project}`;
-  $('input').placeholder = meta.kind === 'shell' ? '输入命令…' : '给 Claude 发消息…';
+  const agentName = meta.kind === 'agy' ? 'agy' : 'Claude';
+  $('input').placeholder = meta.kind === 'shell' ? '输入命令…' : `给 ${agentName} 发消息…`;
 }
 
 function renderBanner() {
@@ -529,6 +537,28 @@ async function checkTabStillExists() {
   setTimeout(() => session.id && !session.gone && connectStream(), 1500);
 }
 
+// SGR mouse wheel: button 64 = up, 65 = down, reported at the screen centre.
+let wheelPending = 0;
+let wheelTimer = 0;
+function queueWheel(term, lines) {
+  if (term.modes.mouseTrackingMode === 'none') return;
+  wheelPending += lines;
+  if (wheelTimer) return;
+  wheelTimer = setTimeout(() => {
+    wheelTimer = 0;
+    const steps = Math.trunc(wheelPending / LINES_PER_WHEEL);
+    wheelPending -= steps * LINES_PER_WHEEL;
+    const count = Math.min(Math.abs(steps), WHEEL_MAX_EVENTS);
+    if (!count || !session.id || session.gone) return;
+    const button = steps < 0 ? 64 : 65;
+    const col = Math.max(1, Math.ceil(term.cols / 2));
+    const row = Math.max(1, Math.ceil(term.rows / 2));
+    const data = `\x1b[<${button};${col};${row}M`.repeat(count);
+    // Scrolling only reads history, so it must not take the size over from the Mac.
+    api(`/api/tab/${session.id}/input`, { data }).catch((error) => toast(`滚动失败：${error.message}`));
+  }, WHEEL_FLUSH_MS);
+}
+
 function installTouchScroll(wrap, term) {
   let lastY = 0;
   let startY = 0;
@@ -540,10 +570,13 @@ function installTouchScroll(wrap, term) {
   const scrollBy = (pixels) => {
     residue += pixels / lineHeight();
     const lines = Math.trunc(residue);
-    if (lines) {
-      term.scrollLines(lines);
-      residue -= lines;
-    }
+    if (!lines) return;
+    residue -= lines;
+    // Full-screen TUIs (e.g. Claude Code with "tui": "fullscreen") live in the
+    // alternate buffer, which has no scrollback: forward the swipe as mouse
+    // wheel events so the app scrolls its own history.
+    if (term.buffer.active.type === 'alternate') queueWheel(term, lines);
+    else term.scrollLines(lines);
   };
   wrap.addEventListener('touchstart', (event) => {
     cancelAnimationFrame(frame);

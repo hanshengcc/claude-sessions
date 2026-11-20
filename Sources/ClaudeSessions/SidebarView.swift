@@ -9,22 +9,43 @@ enum SidebarMode: String, CaseIterable {
     var icon: String { self == .recent ? "clock" : "folder" }
 }
 
+/// Which agent's sessions the sidebar lists.
+enum AgentFilter: String, CaseIterable {
+    case all, claude, agy
+
+    var label: String {
+        switch self {
+        case .all: return "全部"
+        case .claude: return "Claude"
+        case .agy: return "agy"
+        }
+    }
+
+    func includes(_ session: SessionInfo) -> Bool {
+        self == .all || session.agent.rawValue == rawValue
+    }
+}
+
 struct SidebarView: View {
     @EnvironmentObject private var store: SessionStore
     @EnvironmentObject private var tabs: TabManager
     @EnvironmentObject private var ui: UIState
     @AppStorage("sidebarMode") private var mode: SidebarMode = .recent
     @AppStorage("showHidden") private var showHidden = false
+    @AppStorage("agentFilter") private var agentFilter: AgentFilter = .all
     @State private var query = ""
     /// Row highlight only. AppKit rewrites list selection when rows reorder, so
     /// selection changes must never open sessions; only an explicit click does.
     @State private var highlighted: String?
-    @State private var collapsed: Set<String> = []
+    /// Projects start collapsed so the list stays scannable; only these are open.
+    @State private var expanded: Set<String> = []
     @State private var renaming: SessionInfo?
     @State private var renameText = ""
     @FocusState private var searchFocused: Bool
 
-    private var visible: [SessionInfo] { store.visible(query: query, showHidden: showHidden) }
+    private var visible: [SessionInfo] {
+        store.visible(query: query, showHidden: showHidden).filter(agentFilter.includes)
+    }
 
     var body: some View {
         List(selection: $highlighted) {
@@ -62,17 +83,23 @@ struct SidebarView: View {
             Button("保存") { renaming.map { store.rename($0.id, to: renameText) } }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("名称只保存在本 App 中，不会改动 Claude Code 的会话记录。")
+            Text("名称只保存在本 App 中，不会改动 Claude Code / agy 的会话记录。")
         }
     }
 
     // MARK: Pieces
 
     private var modePicker: some View {
-        Picker("视图", selection: $mode) {
-            ForEach(SidebarMode.allCases, id: \.self) { mode in
-                Label(mode.rawValue, systemImage: mode.icon).tag(mode)
+        VStack(spacing: 6) {
+            Picker("视图", selection: $mode) {
+                ForEach(SidebarMode.allCases, id: \.self) { mode in
+                    Label(mode.rawValue, systemImage: mode.icon).tag(mode)
+                }
             }
+            Picker("来源", selection: $agentFilter) {
+                ForEach(AgentFilter.allCases, id: \.self) { Text($0.label).tag($0) }
+            }
+            .help("只看 Claude 或 agy 的会话")
         }
         .pickerStyle(.segmented)
         .labelsHidden()
@@ -101,8 +128,14 @@ struct SidebarView: View {
         .overlay(alignment: .top) { Divider() }
     }
 
+    @ViewBuilder
     private var emptyResult: some View {
-        ContentUnavailableView.search(text: query)
+        if query.isEmpty {
+            ContentUnavailableView("没有\(agentFilter == .all ? "" : " \(agentFilter.label) ")会话",
+                                   systemImage: "bubble.left")
+        } else {
+            ContentUnavailableView.search(text: query)
+        }
     }
 
     private var projectCount: Int { Set(visible.map(\.cwd)).count }
@@ -130,7 +163,10 @@ struct SidebarView: View {
     private func contextMenu(for session: SessionInfo) -> some View {
         Button { tabs.open(session) } label: { Label("打开", systemImage: "arrow.up.right.square") }
         Button { tabs.newSession(in: session.cwd) } label: {
-            Label("在同目录新建会话", systemImage: "plus.bubble")
+            Label("在同目录新建 Claude 会话", systemImage: "plus.bubble")
+        }
+        Button { tabs.newSession(in: session.cwd, agent: .agy) } label: {
+            Label("在同目录新建 agy 会话", systemImage: "plus.bubble")
         }
         Button { tabs.newShell(in: session.cwd) } label: {
             Label("在此目录打开终端", systemImage: "terminal")
@@ -149,7 +185,7 @@ struct SidebarView: View {
                 ? Label("取消隐藏", systemImage: "eye") : Label("隐藏", systemImage: "eye.slash")
         }
         Divider()
-        Button { ui.copy(resumeCommand(cwd: session.cwd, sessionID: session.id), message: "已复制恢复命令") } label: {
+        Button { ui.copy(resumeCommand(cwd: session.cwd, sessionID: session.id, agent: session.agent), message: "已复制恢复命令") } label: {
             Label("复制恢复命令", systemImage: "terminal")
         }
         Button { ui.copy(session.id, message: "已复制会话 ID") } label: { Label("复制会话 ID", systemImage: "number") }
@@ -160,8 +196,8 @@ struct SidebarView: View {
 
     private func expandedBinding(_ cwd: String) -> Binding<Bool> {
         Binding(
-            get: { !query.isEmpty || !collapsed.contains(cwd) },
-            set: { expanded in collapsed = expanded ? collapsed.subtracting([cwd]) : collapsed.union([cwd]) }
+            get: { !query.isEmpty || expanded.contains(cwd) },
+            set: { isOpen in expanded = isOpen ? expanded.union([cwd]) : expanded.subtracting([cwd]) }
         )
     }
 
@@ -193,7 +229,12 @@ struct ProjectHeader: View {
             Button { tabs.newSession(in: cwd) } label: { Image(systemName: "plus.bubble") }
                 .buttonStyle(.borderless)
                 .opacity(hovering ? 1 : 0)
-                .help("在 \(abbreviateHome(cwd)) 新建会话")
+                .help("在 \(abbreviateHome(cwd)) 新建会话（右键选 agy）")
+                .contextMenu {
+                    ForEach(Agent.allCases, id: \.self) { agent in
+                        Button("新建 \(agent.displayName) 会话") { tabs.newSession(in: cwd, agent: agent) }
+                    }
+                }
         }
         .help(abbreviateHome(cwd))
         .onHover { hovering = $0 }
@@ -208,7 +249,12 @@ struct NewSessionMenu: View {
 
     var body: some View {
         Menu {
-            Button { ui.newSessionToken += 1 } label: { Label("选择文件夹…", systemImage: "folder.badge.plus") }
+            Button { ui.requestNewSession(.claude) } label: {
+                Label("选择文件夹…", systemImage: "folder.badge.plus")
+            }
+            Button { ui.requestNewSession(.agy) } label: {
+                Label("选择文件夹（agy）…", systemImage: "folder.badge.plus")
+            }
             Button { tabs.newShell(in: tabs.selected?.cwd ?? NSHomeDirectory()) } label: {
                 Label("新建终端标签", systemImage: "terminal")
             }
@@ -220,10 +266,19 @@ struct NewSessionMenu: View {
                     }
                 }
             }
+            Menu {
+                ForEach(store.recentProjects.prefix(recentLimit), id: \.self) { cwd in
+                    Button { tabs.newSession(in: cwd, agent: .agy) } label: {
+                        Label(abbreviateHome(cwd), systemImage: "folder")
+                    }
+                }
+            } label: {
+                Label("用 agy 新建", systemImage: "sparkles")
+            }
         } label: {
             Label("新建会话", systemImage: "square.and.pencil")
         }
-        .help("新建会话 (⌘T)")
+        .help("新建会话 (⌘N)")
     }
 }
 
@@ -256,6 +311,7 @@ struct SessionRow: View {
 
     private var titleLine: some View {
         HStack(spacing: 4) {
+            if session.agent == .agy { AgentBadge() }
             Text(store.displayTitle(session))
                 .font(.system(size: 13, weight: .medium))
                 .lineLimit(1)
